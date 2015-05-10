@@ -23,6 +23,7 @@ classdef sparse_time_varying_MVAR < handle
         threshold_X
         threshold_MM2
         threshold_MM1
+        threshold_all
         iteration_threshold
         epsilon
         
@@ -45,6 +46,7 @@ classdef sparse_time_varying_MVAR < handle
             obj.threshold_X = 10^-3;
             obj.threshold_MM2 = 5*10^-4;
             obj.threshold_MM1 = 5*10^-4;
+            obj.threshold_all = 5*10^-4;
             obj.iteration_threshold =30;
             obj.epsilon = 10^-10;
             obj.synthetic_SNR = 15;
@@ -66,7 +68,7 @@ classdef sparse_time_varying_MVAR < handle
                 obj.trial = input('number of trials:');
                 obj.filename_full = [];
                 
-                [obj.synthetic_A1, obj.synthetic_A2, obj.EEGdata] = obj.synthtic_generate(200);
+                obj.EEGdata = obj.synthtic_generate(200);
                 
                 
             end
@@ -79,13 +81,13 @@ classdef sparse_time_varying_MVAR < handle
                 
                 obj.filename_full = [];
                 
-                [obj.synthetic_A1, obj.synthetic_A2, obj.EEGdata] = obj.synthtic_generate(200);
+                obj.EEGdata = obj.synthtic_generate(200);
             end
             
-            obj.Sigma = eye(obj.chan);
-            obj.X = obj.get_initX(1);
-            [obj.R,obj.Q] = obj.matrix_RQ();
-            obj.D = obj.matrix_D();
+            obj.get_initSigma();
+            obj.get_initX(1);
+            obj.matrix_RQ();
+            obj.matrix_D();
             
             disp(['parameters: \n','alpha1: ',num2str(obj.alpha1)])
             disp(['alpha2: ',num2str(obj.alpha2)])
@@ -97,7 +99,7 @@ classdef sparse_time_varying_MVAR < handle
             
         end
         
-        function [A1,A2,EEGdata] = synthtic_generate(obj, MVAR_break_point)
+        function EEGdata = synthtic_generate(obj, MVAR_break_point)
             % only support one-order model in this verison
             EEGdata = randn(obj.chan, obj.len, obj.trial);
             
@@ -106,6 +108,8 @@ classdef sparse_time_varying_MVAR < handle
             end
             
             [A1, A2, Md1, Md2] = obj.AR_generation_oneorder();
+            obj.synthetic_A1 = A1;
+            obj.synthetic_A2 = A2;
             
             EEG0 = 10*randn(obj.m_order, obj.chan, obj.trial);
             noise0 = randn(obj.m_order, obj.chan, obj.trial); 
@@ -255,14 +259,14 @@ classdef sparse_time_varying_MVAR < handle
         end
         
 
-        function initX = get_initX(obj, method)
+        function get_initX(obj, method)
             % method 1: randomly generated matrix
             % method 2: using all data to estimate AR
             addpath /home/wch/Documents/tv_AR/arfit
             p = obj.m_order;
             c = obj.chan;
             if method == 1
-                initX = sparse(randn(c^2*p*(obj.len - p),1));
+                obj.X = sparse(randn(c^2*p*(obj.len - p),1));
             end
             
             if method == 2 
@@ -285,19 +289,26 @@ classdef sparse_time_varying_MVAR < handle
                 end
                 %%%% initialize with totally non-smooth image
                 noise_factor = std(initX(:));
-                initX = sparse(repmat(initX(:), obj.len - p,1) + noise_factor*randn(c^2*p*(obj.len - p),1));
+                obj.X = sparse(repmat(initX(:), obj.len - p,1) + noise_factor*randn(c^2*p*(obj.len - p),1));
 
             end
             
         end
         
-        function [R,Q] = matrix_RQ(obj,Sigma)
+        
+        function get_initSigma(obj)
+            tempEEG = obj.EEGdata(:,:);
+            obj.Sigma = (tempEEG*tempEEG')/(obj.trial*obj.len).*eye(obj.chan);
+            
+        end 
+        
+        function matrix_RQ(obj)
             p = obj.m_order;
             c = obj.chan;
-            R = sparse(zeros(c^2*p*(obj.len-p)));
-            Q = sparse(zeros(1, c^2*p*(obj.len-p)));
+            obj.R = sparse(zeros(c^2*p*(obj.len-p)));
+            obj.Q = sparse(zeros(1, c^2*p*(obj.len-p)));
             
-            Sigma_sqrt = Sigma^(-0.5);
+            Sigma_sqrt = obj.Sigma^(-0.5);
             for i = p+1:obj.len
                 M_n = sparse(zeros(c^2*p,c^2*p*(obj.len-p)));
                 M_n(:,(i-p-1)*c^2*p+1:(i-p)*c^2*p) = sparse(eye(c^2*p));
@@ -313,11 +324,11 @@ classdef sparse_time_varying_MVAR < handle
                     sW = sW + sparse(squeeze(obj.EEGdata(:,i,k)))'*tilde_W_nk;
                 end
 
-                R = R + M_n'*WW*M_n;
-                Q = Q + sW*M_n;
+                obj.R = obj.R + M_n'*WW*M_n;
+                obj.Q = obj.Q + sW*M_n;
             end
            
-            R = R/2;
+            obj.R = obj.R/2;
            
         end
         
@@ -330,31 +341,35 @@ classdef sparse_time_varying_MVAR < handle
             W_nk = sparse(W_nk);
         end
         
-        function D = matrix_D(obj)
+        function matrix_D(obj)
             p = obj.m_order;
             c = obj.chan;
             D1 = [sparse(-eye(c^2*p*(obj.len - p -1))), sparse(zeros(c^2*p*(obj.len - p -1),c^2*p ))];
             D2 = [sparse(zeros(c^2*p*(obj.len - p -1),c^2*p )), sparse(eye(c^2*p*(obj.len - p -1)))];
-            D = D1+D2;
+            obj.D = D1+D2;
             
         end
         
 
-        function [Sigma, sigma]= matrix_Sigma(obj, A, mode)
+        function sigma = matrix_Sigma(obj,A,mode)
             
             p = obj.m_order;
+            c = obj.chan;
+            cp = c*p;
+            np = obj.len-p;
+            A = reshape(full(A),[c,cp,np]);
             
-            [c,cp,np] = size(A);
-            if (c ~= obj.chan) || (cp/c ~= p) || (np ~= obj.len-p)
-                error('dimension do not match');
-            end
-            
+%             [c,cp,np] = size(A);
+%             if (c ~= obj.chan) || (cp/c ~= p) || (np ~= obj.len-p)
+%                 error('dimension do not match');
+%             end
+%             
             sigma = zeros(c);
             for i = p+1:obj.len
 
                 EEG_in_win = obj.EEGdata(:,i-1:-1:i-p,:);
                 EEG_target = squeeze(obj.EEGdata(:,i,:));
-                X_n = A(:,:,i);
+                X_n = A(:,:,i-p);
                 X_n = sparse(X_n(:));
                 %EEGn = obj.EEGdata(:,i,:);
 %                 WW = sparse(zeros(c^2*p));
@@ -438,7 +453,7 @@ classdef sparse_time_varying_MVAR < handle
                 target_old = target_update;
                 X_old = X_update; 
                 
-                disp(['MM2: iteration ',  num2str(iteration_time), ' delta t: ', num2str(delta_t_sign)]);
+                disp(['    MM2: iteration ',  num2str(iteration_time), ' delta t: ', num2str(delta_t_sign)]);
 
             end
             
@@ -474,7 +489,7 @@ classdef sparse_time_varying_MVAR < handle
                 target_old = target_update;
                 X_old = X_update;
                 
-                 disp(['MM1: iteration ',  num2str(iteration_time), ' delta t: ', num2str(delta_t_sign)]);
+                 disp(['  MM1: iteration ',  num2str(iteration_time), ' delta t: ', num2str(delta_t_sign)]);
             
             end
             
@@ -494,11 +509,37 @@ classdef sparse_time_varying_MVAR < handle
             
             mu1 = theta1*c^2*p*(N-p)+obj.alpha1;
             mu2 = theta2*c^2*p*(N-p-1)+obj.alpha2;
+            i = 0;
+            X_old = obj.X;
+            L_old = 1;
+            deltaL = 1;
+            while (deltaL > obj.threshold_all) && (i<20)
+                i = i+1;
+               
+                X_update = obj.get_X_MM1(mu1, mu2, X_old);
+                %%%%%%%% some problem to be sloved 
+                %%%%%%%% update the algorithm, sigma is updated in each
+                %%%%%%%% step
+                matrix_Sigma(obj,X_update,2);
+                
+                obj.matrix_RQ();
+                
+                L_update = (obj.len-p)*obj.trial/2*log(det(obj.Sigma)) + mu1*log(sum(abs(X_update))+obj.beta1) + mu2*log(sum(abs(obj.D*X_update))+obj.beta2);
+                
+                
+                X_old = X_update;
+                
+                dL = (L_update - L_old)/abs( L_old);
+                L_old = L_update;
+                disp(['Iteration ', num2str(i), 'delta t:', num2str(dL)]);
+                
+                deltaL = abs(dL);
+                
+            end
             
-            A_all = obj.get_X_MM1(mu1, mu2, obj.X);
             
-            A_all(abs(A_all) < obj.threshold_X) = 0;
-            A = reshape(full(A_all),[c,c*p,N-p]);
+            X_update(abs(X_update) < obj.threshold_X) = 0;
+            A = reshape(full(X_update),[c,c*p,N-p]);
             
             
             
