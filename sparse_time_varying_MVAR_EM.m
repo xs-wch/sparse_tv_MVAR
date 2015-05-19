@@ -12,6 +12,8 @@ classdef sparse_time_varying_MVAR_EM < handle
         beta2
         lambda1
         lambda2
+        lambda1_new
+        lambda2_new
         poster_precisex
         poster_varx
         poster_mux
@@ -45,10 +47,10 @@ classdef sparse_time_varying_MVAR_EM < handle
             %              3: random generated data, just for test
         
             
-            obj.alpha1 = 10^-4;
-            obj.alpha2 = 10^-4;
-            obj.beta1 = 10^-4;
-            obj.beta2 = 10^-4;
+            obj.alpha1 = 10^-10;
+            obj.alpha2 = 10^-10;
+            obj.beta1 = 10^-10;
+            obj.beta2 = 10^-10;
            
             obj.threshold_X = 10^-3;
           %  obj.threshold_MM2 = 5*10^-4;
@@ -99,8 +101,7 @@ classdef sparse_time_varying_MVAR_EM < handle
 %                 obj.poster_varx = sparse(zeros(obj.chan^2*obj.m_order*(obj.len-obj.m_order)));
 %                 obj.poster_mux = sparse(zeros(obj.chan^2*obj.m_order*(obj.len-obj.m_order),1));   
                 obj.matrix_D();
-                obj.matrix_varx1();
-                obj.matrix_varx2();
+
                 
 
 
@@ -307,6 +308,9 @@ classdef sparse_time_varying_MVAR_EM < handle
                 temp2 = trace(obj.varx2*obj.poster_varx) + obj.poster_mux'*obj.varx2*obj.poster_mux+2*obj.beta2;
                 obj.lambda2 = (c^2*p*(N-p-1)+2*obj.alpha2-2)/temp2;
                 
+                obj.matrix_varx1();
+                obj.matrix_varx2();
+                
                 disp(['initial lambda1: ',num2str(obj.lambda1)]);
                 disp(['initial lambda2: ',num2str(obj.lambda2)]);
 
@@ -315,17 +319,81 @@ classdef sparse_time_varying_MVAR_EM < handle
         end
         
         
-        function get_initSigma(obj)
-            tempEEG = obj.EEGdata(:,:);
-            obj.Sigma = (tempEEG*tempEEG')/(obj.trial*obj.len).*eye(obj.chan);
+        
+        function get_init_new(obj, method)
+            % method 1: randomly generated matrix
+            % method 2: using all data to estimate AR
+            addpath /home/wch/Documents/tv_AR/arfit
+            p = obj.m_order;
+            c = obj.chan;
+            N = obj.len;
+            if method == 1
+                %obj.X = sparse(randn(c^2*p*(N  - p),1
+                obj.lambda1_new = ones((N-p),1);
+                obj.lambda2_new = ones((N-p-1),1);
+                
+                obj.matrix_varx1_new();
+                obj.matrix_varx2_new();
+                
+                EEG_perm = permute(obj.EEGdata,[2 1 3]);                
+                [~, ~, obj.Sigma, ~, ~, ~] = arfit(EEG_perm, ceil(p/2), p, 'sbc', 'zero');
+            end
             
-        end 
+            if method == 2 
+             
+                EEG_perm = permute(obj.EEGdata,[2 1 3]);
+                
+                [~, A, obj.Sigma, ~, ~, ~] = arfit(EEG_perm, ceil(p/2), p, 'sbc', 'zero');
+                [A_d1, A_d2] = size(A);
+                if A_d1 ~= c
+                    error('dimension do not match');
+                end
+                est_order = floor(A_d2/A_d1);
+                if est_order <p
+                    initX = zeros(c, c*p);
+                    initX(:,1: c*est_order) = A;
+                    
+                else
+                    initX = A(:, 1:c*p);                    
+                    
+                end
+                %%%% initialize with totally non-smooth image
+               
+                obj.poster_mux = sparse(repmat(initX(:), N - p,1));
+                obj.poster_precisex = sparse(eye(c^2*p*(N -p)));
+                obj.poster_varx = obj.poster_precisex;
+                
+                temp1 = trace(obj.varx1*obj.poster_varx) + obj.poster_mux'*obj.varx1*obj.poster_mux+2*obj.beta1;
+                obj.lambda1 = (c^2*p*(N-p)+2*obj.alpha1-2)/temp1*ones(c^2*p*(N-p),1);
+            
+                temp2 = trace(obj.varx2*obj.poster_varx) + obj.poster_mux'*obj.varx2*obj.poster_mux+2*obj.beta2;
+                obj.lambda2 = (c^2*p*(N-p-1)+2*obj.alpha2-2)/temp2*ones(c^2*p*(N-p-1),1);
+                
+%                 obj.matrix_varx1_new();
+%                 obj.matrix_varx2_new();
+                
+                disp(['initial lambda1: ',num2str(obj.lambda1(1))]);
+                disp(['initial lambda2: ',num2str(obj.lambda2(1))]);
+
+            end
+            
+        end
+        
+        
+        
+        
+        
+%         function get_initSigma(obj)
+%             tempEEG = obj.EEGdata(:,:);
+%             obj.Sigma = (tempEEG*tempEEG')/(obj.trial*obj.len).*eye(obj.chan);
+%             
+%         end 
         
         function matrix_RQ(obj)
             p = obj.m_order;
             c = obj.chan;
-            obj.R = sparse(zeros(c^2*p*(obj.len-p)));
-            obj.Q = sparse(zeros(1, c^2*p*(obj.len-p)));
+            obj.R = sparse(c^2*p*(obj.len-p),c^2*p*(obj.len-p));
+            obj.Q = sparse(1, c^2*p*(obj.len-p));
             
             Sigma_sqrt = obj.Sigma^(-0.5);
             for i = p+1:obj.len
@@ -333,8 +401,8 @@ classdef sparse_time_varying_MVAR_EM < handle
 
                 EEG_in_win = obj.EEGdata(:,i-1:-1:i-p,:);
                 %EEGn = obj.EEGdata(:,i,:);
-                WW = sparse(zeros(c^2*p));
-                sW = sparse(zeros(1,c^2*p));
+                WW = sparse(c^2*p,c^2*p);
+                sW = sparse(1,c^2*p);
                 
                 for k = 1:obj.trial
                     W_nk = obj.matrix_W(EEG_in_win,k);
@@ -374,7 +442,7 @@ classdef sparse_time_varying_MVAR_EM < handle
             p = obj.m_order;
             c = obj.chan;
             
-            M_n = sparse(zeros(c^2*p,c^2*p*(obj.len-p)));
+            M_n = sparse(c^2*p,c^2*p*(obj.len-p));
             M_n(:,(i-p-1)*c^2*p+1:(i-p)*c^2*p) = sparse(eye(c^2*p));
         end
         
@@ -449,14 +517,39 @@ classdef sparse_time_varying_MVAR_EM < handle
             
         end
         
+        function matrix_varx1_new(obj) % \sum_n lambda_1n*Mn'*Mn
+            p = obj.m_order;
+            c = obj.chan;
+            temp = repmat(obj.lambda1_new', c^2*p,1);
+            obj.varx1 = sparse(diag(temp(:)));
+            
+        end
+        
         function matrix_varx2(obj) % \sum_n Mn,n+1'*D'*D*Mn,n+1
             p = obj.m_order;
             c = obj.chan;
-            temp_varx = sparse(zeros(c^2*p*(obj.len-p)));
+            temp_varx = sparse(c^2*p*(obj.len-p),c^2*p*(obj.len-p));
             
             for i = p+1:obj.len-1
                 M_n_n1 = [obj.matrix_Mn(i);obj.matrix_Mn(i+1)];
                 temp_varx = temp_varx+M_n_n1'*obj.D'*obj.D*M_n_n1;
+                
+            end
+            obj.varx2 = temp_varx;
+        end
+        
+        function matrix_varx2_new(obj) % \sum_n lambda_2n*Mn,n+1'*D'*D*Mn,n+1
+            p = obj.m_order;
+            c = obj.chan;
+            temp_varx = sparse(c^2*p*(obj.len-p),c^2*p*(obj.len-p));
+            tempD = obj.D'*obj.D;
+            
+            
+            for i = p+1:obj.len-1
+                % M_n_n1 = [obj.matrix_Mn(i);obj.matrix_Mn(i+1)];
+                tempMD = sparse(c^2*p*(obj.len-p),c^2*p*(obj.len-p));
+                tempMD((i-p-1)*c^2*p+1:(i-p+1)*c^2*p,(i-p-1)*c^2*p+1:(i-p+1)*c^2*p) = obj.lambda2_new(i-p)*tempD;
+                temp_varx = temp_varx+tempMD;
                 
             end
             obj.varx2 = temp_varx;
@@ -470,10 +563,21 @@ classdef sparse_time_varying_MVAR_EM < handle
             
         end
         
+        function E_step_new(obj)
+        
+            obj.poster_precisex = obj.varx1+obj.varx2+obj.R;
+            obj.poster_varx = inv(obj.poster_precisex);
+            obj.poster_mux = obj.poster_precisex\obj.Q';
+            
+        end
+        
         function M_step(obj)
             p = obj.m_order;
             c = obj.chan;
             N = obj.len;
+            
+            obj.matrix_varx1();
+            obj.matrix_varx2();
             
             temp1 = trace(obj.varx1*obj.poster_varx) + obj.poster_mux'*obj.varx1*obj.poster_mux+2*obj.beta1;
             obj.lambda1 = (c^2*p*(N-p)+2*obj.alpha1-2)/temp1;
@@ -485,10 +589,32 @@ classdef sparse_time_varying_MVAR_EM < handle
             
         end
         
+        function M_step_new(obj)
+            p = obj.m_order;
+            c = obj.chan;
+            N = obj.len;
+            %%%%% to be continue
+            for i = 1:N-p
+               xn = obj.poster_mux((i-1)*c^2*p+1:i*c^2*p);
+               vxn =  obj.poster_varx((i-1)*c^2*p+1:i*c^2*p,(i-1)*c^2*p+1:i*c^2*p);
+               obj.lambda1_new(i) = (c^2*p+2*obj.alpha1-2)/(xn'*xn+trace(vxn)+2*obj.beta1);
+            end
+            
+            tempD = obj.D'*obj.D;
+            for i = 1:N-p-1
+               xn = obj.poster_mux((i-1)*c^2*p+1:(i+1)*c^2*p);
+               vxn =  obj.poster_varx((i-1)*c^2*p+1:(i+1)*c^2*p,(i-1)*c^2*p+1:(i+1)*c^2*p);
+               obj.lambda2_new(i) = (c^2*p+2*obj.alpha2-2)/(xn'*tempD*xn+trace(vxn*tempD)+2*obj.beta2);
+            end
+            
+            obj.matrix_Sigma(2);
+            
+        end
+        
         
         function A = estimate_model_EM(obj)
             
-            obj.get_init(2);
+            obj.get_init(1);
 %            obj.get_initX(1);
             obj.matrix_RQ();
       
@@ -539,6 +665,63 @@ classdef sparse_time_varying_MVAR_EM < handle
  
             
         end
+        
+        
+        
+         function A = estimate_model_EM_new(obj)
+            
+            obj.get_init_new(1);
+%            obj.get_initX(1);
+            obj.matrix_RQ();
+      
+
+            
+            disp('parameters:')
+            disp(['alpha1: ',num2str(obj.alpha1)])
+            disp(['alpha2: ',num2str(obj.alpha2)])
+            disp(['beta1: ',num2str(obj.beta1)])
+            disp(['beta2: ',num2str(obj.beta2)])
+            disp(['model order: ', num2str(obj.m_order)])
+            disp(['EEGdata size: ',num2str(obj.chan),'*',num2str(obj.len),'*',num2str(obj.trial)])
+
+            p = obj.m_order;
+            c = obj.chan;
+            cp = c*p;
+            np = obj.len-p;
+            deltaX = 1;
+            X_old = sparse(ones(c^2*p*np,1));
+            niter = 0;
+            while (deltaX > obj.threshold_all) && (niter < obj.iteration_threshold) 
+                niter = niter+1;
+                tic;
+                obj.E_step_new();
+                t1 = toc;
+                tic;
+                obj.M_step_new();
+                t2 = toc;
+                tic;
+                obj.matrix_RQ();
+                t3 = toc;
+                
+                deltaX = norm(obj.poster_mux-X_old)/norm(X_old);
+                X_old = obj.poster_mux;
+                
+                disp(['iteration: ', num2str(niter), ' deltaX: ',num2str(deltaX)]);
+                disp(['E-step takes ',num2str(t1),'s']);
+                disp(['M-step takes ',num2str(t2),'s']);
+                disp(['Update Q and R takes ',num2str(t3),'s']);
+                
+            end
+            
+            A = obj.poster_mux;
+            
+            A(abs(A)<obj.threshold_X) = 0;
+            
+            A = reshape(full(A),[c,cp,np]);
+ 
+            
+        end
+        
  
     end
     
