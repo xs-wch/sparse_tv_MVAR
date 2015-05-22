@@ -56,7 +56,7 @@ classdef sparse_time_varying_MVAR_EM < handle
           %  obj.threshold_MM2 = 5*10^-4;
           %  obj.threshold_MM1 = 5*10^-4;
             obj.threshold_all = 5*10^-6;
-            obj.iteration_threshold =50;
+            obj.iteration_threshold =30;
 %            obj.epsilon = 10^-10;
             obj.synthetic_SNR = 15;
             if working_mode == 1
@@ -332,8 +332,8 @@ classdef sparse_time_varying_MVAR_EM < handle
                 obj.lambda1_new = ones((N-p),1);
                 obj.lambda2_new = ones((N-p-1),1);
                 
-                obj.matrix_varx1_new();
-                obj.matrix_varx2_new();
+%                 obj.matrix_varx1_new();
+%                 obj.matrix_varx2_new();
                 
                 EEG_perm = permute(obj.EEGdata,[2 1 3]);                
                 [~, ~, obj.Sigma, ~, ~, ~] = arfit(EEG_perm, ceil(p/2), p, 'sbc', 'zero');
@@ -369,8 +369,8 @@ classdef sparse_time_varying_MVAR_EM < handle
                 temp2 = trace(obj.varx2*obj.poster_varx) + obj.poster_mux'*obj.varx2*obj.poster_mux+2*obj.beta2;
                 obj.lambda2 = (c^2*p*(N-p-1)+2*obj.alpha2-2)/temp2*ones(c^2*p*(N-p-1),1);
                 
-%                 obj.matrix_varx1_new();
-%                 obj.matrix_varx2_new();
+                obj.matrix_varx1();
+                obj.matrix_varx2();
                 
                 disp(['initial lambda1: ',num2str(obj.lambda1(1))]);
                 disp(['initial lambda2: ',num2str(obj.lambda2(1))]);
@@ -564,7 +564,11 @@ classdef sparse_time_varying_MVAR_EM < handle
         end
         
         function E_step_new(obj)
-        
+            
+            
+            obj.matrix_varx1_new();
+            obj.matrix_varx2_new();
+            
             obj.poster_precisex = obj.varx1+obj.varx2+obj.R;
             obj.poster_varx = inv(obj.poster_precisex);
             obj.poster_mux = obj.poster_precisex\obj.Q';
@@ -576,8 +580,8 @@ classdef sparse_time_varying_MVAR_EM < handle
             c = obj.chan;
             N = obj.len;
             
-            obj.matrix_varx1();
-            obj.matrix_varx2();
+%             obj.matrix_varx1();
+%             obj.matrix_varx2();
             
             temp1 = trace(obj.varx1*obj.poster_varx) + obj.poster_mux'*obj.varx1*obj.poster_mux+2*obj.beta1;
             obj.lambda1 = (c^2*p*(N-p)+2*obj.alpha1-2)/temp1;
@@ -607,6 +611,38 @@ classdef sparse_time_varying_MVAR_EM < handle
                obj.lambda2_new(i) = (c^2*p+2*obj.alpha2-2)/(xn'*tempD*xn+trace(vxn*tempD)+2*obj.beta2);
             end
             
+
+            obj.matrix_Sigma(2);
+            
+        end
+        
+        function M_step_constlambda1(obj)
+            
+            %%%% the parameter lambda1 is identical across the time period
+            p = obj.m_order;
+            c = obj.chan;
+            N = obj.len;
+            %%%%% to be continue
+%             for i = 1:N-p
+%                xn = obj.poster_mux((i-1)*c^2*p+1:i*c^2*p);
+%                vxn =  obj.poster_varx((i-1)*c^2*p+1:i*c^2*p,(i-1)*c^2*p+1:i*c^2*p);
+%                obj.lambda1_new(i) = (c^2*p+2*obj.alpha1-2)/(xn'*xn+trace(vxn)+2*obj.beta1);
+%             end
+            
+            temp1 = trace(obj.poster_varx) + obj.poster_mux'*obj.poster_mux+2*obj.beta1;
+            obj.lambda1_new = (c^2*p*(N-p)+2*obj.alpha1-2)/temp1*ones((N-p),1);
+
+
+
+
+            tempD = obj.D'*obj.D;
+            for i = 1:N-p-1
+               xn = obj.poster_mux((i-1)*c^2*p+1:(i+1)*c^2*p);
+               vxn =  obj.poster_varx((i-1)*c^2*p+1:(i+1)*c^2*p,(i-1)*c^2*p+1:(i+1)*c^2*p);
+               obj.lambda2_new(i) = (c^2*p+2*obj.alpha2-2)/(xn'*tempD*xn+trace(vxn*tempD)+2*obj.beta2);
+            end
+            
+
             obj.matrix_Sigma(2);
             
         end
@@ -697,7 +733,7 @@ classdef sparse_time_varying_MVAR_EM < handle
                 obj.E_step_new();
                 t1 = toc;
                 tic;
-                obj.M_step_new();
+                obj.M_step_constlambda1();
                 t2 = toc;
                 tic;
                 obj.matrix_RQ();

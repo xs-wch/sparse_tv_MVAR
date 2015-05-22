@@ -34,7 +34,7 @@ classdef sparse_time_varying_MVAR < handle
     end
     
     methods
-        function obj = sparse_time_varying_MVAR(working_mode)
+        function obj = sparse_time_varying_MVAR(working_mode,data_to_analyze)
             % working_mode 1: real data
             %              2: synthetic data
             %              3: random generated data, just for test
@@ -51,12 +51,18 @@ classdef sparse_time_varying_MVAR < handle
             obj.epsilon = 10^-10;
             obj.synthetic_SNR = 15;
             if working_mode == 1
-                obj.filename_full = input('Please type in the full-path filename', 's');
-                if isempty(obj.filename_full)
-                    obj.EEGdata = load(obj.filename_full);
-                    [obj.chan, obj.len, obj.trial] = size(obj.EEGdata);
+%                 obj.filename_full = input('Please type in the full-path filename', 's');
+%                 if isempty(obj.filename_full)
+%                     obj.EEGdata = load(obj.filename_full);
+%                     [obj.chan, obj.len, obj.trial] = size(obj.EEGdata);
+%                     
+%                 end
+%                 
+%                 obj.synthetic_A1 = [];obj.synthetic_A2 = [];
+                obj.EEGdata = data_to_analyze;
+                [obj.chan, obj.len, obj.trial] = size(obj.EEGdata);
                     
-                end
+              
                 
                 obj.synthetic_A1 = [];obj.synthetic_A2 = [];
             end
@@ -83,19 +89,7 @@ classdef sparse_time_varying_MVAR < handle
                 
                 obj.EEGdata = obj.synthtic_generate(200);
             end
-            
-            obj.get_initSigma();
-            obj.get_initX(1);
-            obj.matrix_RQ();
-            obj.matrix_D();
-            
-            disp(['parameters: \n','alpha1: ',num2str(obj.alpha1)])
-            disp(['alpha2: ',num2str(obj.alpha2)])
-            disp(['beta1: ',num2str(obj.beta1)])
-            disp(['beta2: ',num2str(obj.beta2)])
-            disp(['model order: ', num2str(obj.m_order)])
-            disp(['EEGdata size: ',num2str(obj.chan),'*',num2str(obj.len),'*',num2str(obj.trial)])
-            
+
             
         end
         
@@ -111,7 +105,7 @@ classdef sparse_time_varying_MVAR < handle
             obj.synthetic_A1 = A1;
             obj.synthetic_A2 = A2;
             
-            EEG0 = 10*randn(obj.m_order, obj.chan, obj.trial);
+            EEG0 = randn(obj.m_order, obj.chan, obj.trial);
             noise0 = randn(obj.m_order, obj.chan, obj.trial); 
             for itrial = 1:obj.trial
                            
@@ -241,7 +235,7 @@ classdef sparse_time_varying_MVAR < handle
         function [A1, A2] = coef_refactor(obj, AR_coef1, AR_coef2)
             sign_A1 = sign(AR_coef1);
             sign_A2 = sign(AR_coef2);
-            
+           2 
             abs_A1 = abs(AR_coef1);
             abs_A2 = abs(AR_coef2);
             
@@ -288,7 +282,7 @@ classdef sparse_time_varying_MVAR < handle
                     
                 end
                 %%%% initialize with totally non-smooth image
-                noise_factor = std(initX(:));
+                noise_factor = 0.1*std(initX(:));
                 obj.X = sparse(repmat(initX(:), obj.len - p,1) + noise_factor*randn(c^2*p*(obj.len - p),1));
 
             end
@@ -321,7 +315,8 @@ classdef sparse_time_varying_MVAR < handle
                     W_nk = obj.matrix_W(EEG_in_win,k);
                     tilde_W_nk = sparse(Sigma_sqrt)*W_nk;  
                     WW = WW + tilde_W_nk'*tilde_W_nk;
-                    sW = sW + sparse(squeeze(obj.EEGdata(:,i,k)))'*tilde_W_nk;
+                    % import change on May 11
+                    sW = sW + sparse(Sigma_sqrt*squeeze(obj.EEGdata(:,i,k)))'*tilde_W_nk;
                 end
 
                 obj.R = obj.R + M_n'*WW*M_n;
@@ -446,7 +441,7 @@ classdef sparse_time_varying_MVAR < handle
                 target_update = X_update'*obj.R*X_update-obj.Q*X_update+rho1*sum(abs(X_update))+rho2*sum(abs(obj.D*X_update));
                 
                 delta_t_sign = (target_update - target_old)/abs(target_old);
-                delta_t = abs(delta_t_sign);
+                delta_t = -(delta_t_sign);
                 abs(norm(X_update-X_old)/norm(X_old));
                 %(target_update - target_old)/abs(target_old)
                 
@@ -501,14 +496,40 @@ classdef sparse_time_varying_MVAR < handle
         end
         
         
-        function A = estimate_model(obj,theta1,theta2)
+        function [theta1, theta2] = update_theta(obj)
+            %%%% update theta1 and theta2 using stoac EM
+        end
+        
+        function A = estimate_model(obj,theta1,theta2,sp_mode)
+            
+            obj.get_initSigma();
+            obj.get_initX(1);
+            obj.matrix_RQ();
+            obj.matrix_D();
+            
+            disp(['parameters: \n','alpha1: ',num2str(obj.alpha1)])
+            disp(['alpha2: ',num2str(obj.alpha2)])
+            disp(['beta1: ',num2str(obj.beta1)])
+            disp(['beta2: ',num2str(obj.beta2)])
+            disp(['model order: ', num2str(obj.m_order)])
+            disp(['EEGdata size: ',num2str(obj.chan),'*',num2str(obj.len),'*',num2str(obj.trial)])
             %data = obj.EEGdata;
             c = obj.chan;
             p = obj.m_order;
             N= obj.len;
             
-            mu1 = theta1*c^2*p*(N-p)+obj.alpha1;
+            
+            if sp_mode == 1 % with sparse
+                mu1 = theta1*c^2*p*(N-p)+obj.alpha1;
+                
+            end
+            if sp_mode == 2 % without sparse
+                mu1 = 0;
+            end
+            
             mu2 = theta2*c^2*p*(N-p-1)+obj.alpha2;
+            
+            disp(['mu1: ',num2str(mu1),' mu2', num2str(mu2)]);
             i = 0;
             X_old = obj.X;
             L_old = 1;
