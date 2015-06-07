@@ -1,6 +1,6 @@
 function test_MH
-    X = randn(81,1);
-    [e1,e2] = M_H_algorithm(X, 100000);
+    X = randn(9*999,1);
+    [e1,e2] = M_H_algorithm(X, 100);
 
 end
 
@@ -11,7 +11,7 @@ function [e1,e2] = M_H_algorithm(X, MCsize)
     end
     c = 3;
     p = 1;
-    N = 10;
+    N = 1000;
     theta1 = 0.3;
     theta2 = 0.3;
     
@@ -44,9 +44,31 @@ function [e1,e2] = M_H_algorithm(X, MCsize)
     if err ~= 0
         error(message('stats:mvnrnd:BadCovariance2DSymPos'));
     end
+    L0 = full(L);
+    a1 = mu1/((sum(abs(X)))^2);
+    a2 = mu2/((sum(abs(DX)))^2);
+    
+    %A = 2*obj.R-A1-A2;
+    L = cholcov(2*R);
+    L1 = cholupdate(full(L),full(sqrt(a1)*sign1),'-');
+    L2 = cholupdate(full(L1),full(sqrt(a2)*sign2),'-');
+    
+    tt = (L0(L0~=0)-L2(L2~=0))./L0(L0~=0);
+    
+    
     %%%% problem here to be continue
     randvec = randn(c^2*p*(N-p),MCsize);
+    tic
     MCsample = L\randvec+repmat(X,1,MCsize);
+    toc
+    
+    matlabpool open
+    tic
+    parfor kk = 1:MCsize
+    MCsample(:,kk) = L\randvec(:,kk)+X;
+    end
+    toc
+    matlabpool close
 
     %%%% M-H
     p_tilde = @(x) exp(-x'*R*x+Q*x-mu1*log(sum(abs(x)))-mu2*log(sum(abs(D*x))));

@@ -22,6 +22,8 @@ classdef sparse_time_varying_MVAR < handle
         Q
         D
         H
+        Rn
+        Qn
         
         threshold_X
         threshold_MM2
@@ -499,16 +501,21 @@ classdef sparse_time_varying_MVAR < handle
         end
         
         
-        function update_theta(obj, X)
+        function update_theta(obj, X,delta_theta)
             %%%% update theta1 and theta2 using stochastic EM
             c = obj.chan;
             p = obj.m_order;
             N= obj.len;
             %%%%E_step: M-H algorithm
-            %e1 = log(sum(abs(X))+obj.beta1);
-            %e2 = log(sum(abs(obj.D*X))+obj.beta2);
-            MCsize = 1000;
-            [e1,e2] = M_H_algorithm(obj, X, MCsize);
+            if delta_theta >10^-2
+                e1 = log(sum(abs(X))+obj.beta1);
+                e2 = log(sum(abs(obj.D*X))+obj.beta2);
+            else
+                MCround = 1;
+                %[e1,e2] = M_H_algorithm(obj, X, MCsize);
+                
+                [e1,e2] = obj.block_M_H_algorithm(X, MCround);
+            end
             
             %%%%M_step: digamma(theta1) = e
             psi1_lowerbound = psi(obj.alpha1);
@@ -522,7 +529,7 @@ classdef sparse_time_varying_MVAR < handle
                 disp('e1<psi1')
             end
             if (e1 < psi1_upperbound) && (e1 > psi1_lowerbound )
-               obj.theta1 = (invpsi(e1)-obj.alpha1)/(c^2*p*(N-p));               
+               obj.theta1 = (obj.invpsi(e1)-obj.alpha1)/(c^2*p*(N-p));               
                 
             end
             
@@ -538,11 +545,29 @@ classdef sparse_time_varying_MVAR < handle
                 disp('e2<psi2')
             end
             if (e2 < psi2_upperbound) && (e2 > psi2_lowerbound )
-               obj.theta2 = (invpsi(e2)-obj.alpha2)/(c^2*p*(N-p-1));               
+               obj.theta2 = (obj.invpsi(e2)-obj.alpha2)/(c^2*p*(N-p-1));               
                 
             end
 
             
+        end
+        
+        function Y=invpsi(obj,X)
+        % Y = INVPSI(X)
+        %
+        % Inverse digamma (psi) function.  The digamma function is the
+        % derivative of the log gamma function.  This calculates the value
+        % Y > 0 for a value X such that digamma(Y) = X.
+        %
+        % This algorithm is from Paul Fackler:
+        % http://www4.ncsu.edu/~pfackler/
+        %
+          L = 1;
+          Y = exp(X);
+          while L > 10e-8
+            Y = Y + L*sign(X-psi(Y));
+            L = L / 2;
+          end
         end
         
         function [e1,e2] = M_H_algorithm(obj, X, MCsize)
@@ -554,32 +579,42 @@ classdef sparse_time_varying_MVAR < handle
             p = obj.m_order;
             N= obj.len;
             %%%% proposal distributuion : laplace approximate
+            
+            X(abs(X) < obj.threshold_X) = 0;
             sign1 = sign(X);
             DX = obj.D*X;
+            DX(abs(DX) < obj.threshold_X) = 0;
             sign2 = obj.D'*sign(DX);
             
             mu1 = obj.theta1*c^2*p*(N-p)+obj.alpha1;
             mu2 = obj.theta2*c^2*p*(N-p-1)+obj.alpha2;
             
-            A1 = sparse((mu1/((sum(abs(X))+obj.beta1)^2))*(sign1*sign1'));
-            A2 = sparse((mu2/((sum(abs(DX))+obj.beta2)^2))*(sign2*sign2'));
+            a1 = mu1/((sum(abs(X))+obj.beta1)^2);
+            a2 = mu2/((sum(abs(DX))+obj.beta2)^2);
+        
             
-            A = 2*obj.R-A1-A2;
-            
-            %%%% Monte Carlo
-            [L,err] = cholcov(A);
-            if err ~= 0
-                error(message('stats:mvnrnd:BadCovariance2DSymPos'));
+            %A = 2*obj.R-A1-A2;
+            L = full(chol(2*obj.R));
+            L = cholupdate(L,full(sqrt(a1)*sign1),'-');
+            try
+                L = sparse(cholupdate(full(L),full(sqrt(a2)*sign2),'-'));
+            catch
+                L = sparse(L);
             end
+            %%%% Monte Carlo
+%             [L,err] = cholcov(A);
+%             if err ~= 0
+%                 error(message('stats:mvnrnd:BadCovariance2DSymPos'));
+%             end
             
             randvec = randn(c^2*p*(N-p),MCsize);
             MCsample = L\randvec+repmat(X,1,MCsize);
             
             %%%% M-H
-            p_tilde = @(x) exp(-x'*obj.R*x+obj.Q*x-mu1*log(sum(abs(x))+obj.beta1)-mu2*log(sum(abs(obj.D*x))+obj.beta2));
+            p_tilde = @(x) -x'*obj.R*x+obj.Q*x-mu1*log(sum(abs(x))+obj.beta1)-mu2*log(sum(abs(obj.D*x))+obj.beta2);
             naccept = 0;
             for i = 1:MCsize
-                ak = min(1,p_tilde(MCsample(:,i))/p_tilde(X));
+                ak = min(1,exp(p_tilde(MCsample(:,i))-p_tilde(X)));
                 if rand(1) > ak
                     MCsample(:,i) = X;
                 else
@@ -598,22 +633,118 @@ classdef sparse_time_varying_MVAR < handle
             
         end
         
-        function Y=invpsi(X)
-        % Y = INVPSI(X)
-        %
-        % Inverse digamma (psi) function.  The digamma function is the
-        % derivative of the log gamma function.  This calculates the value
-        % Y > 0 for a value X such that digamma(Y) = X.
-        %
-        % This algorithm is from Paul Fackler:
-        % http://www4.ncsu.edu/~pfackler/
-        %
-          L = 1;
-          Y = exp(X);
-          while L > 10e-8
-            Y = Y + L*sign(X-psi(Y));
-            L = L / 2;
-          end
+        
+        function [e1,e2] = block_M_H_algorithm(obj, X, MCround)
+            
+            if isempty(MCround)
+                MCround = 1;
+            end
+            c = obj.chan;
+            p = obj.m_order;
+            N= obj.len;
+            %%%% proposal distributuion : laplace approximate
+            
+            X(abs(X) < obj.threshold_X) = 0;
+            sign1 = sign(X);
+            DX = obj.D*X;
+            DX(abs(DX) < obj.threshold_X) = 0;
+            sign2 = sign(DX);
+            
+            mu1 = obj.theta1*c^2*p*(N-p)+obj.alpha1;
+            mu2 = obj.theta2*c^2*p*(N-p-1)+obj.alpha2;
+            
+            
+            a1 = mu1/((sum(abs(X))+obj.beta1)^2);
+            a2 = mu2/((sum(abs(DX))+obj.beta2)^2);
+            
+            p_tilde = @(x) -x'*obj.R*x+obj.Q*x-mu1*log(sum(abs(x))+obj.beta1)-mu2*log(sum(abs(obj.D*x))+obj.beta2);
+            naccept = 0;
+            
+            blockMCsample = zeros(c^2*p*(N-p),MCround*(N-p));
+            for iMC = 1:MCround
+                for itime = 1:N-p
+                    L = full(chol(2*obj.Rn{itime}));
+                    sign1n = sign1((itime-1)*c^2*p+1:itime*c^2*p);
+                    L = cholupdate(L,full(sqrt(a1)*sign1n),'-');
+                    
+                    
+                    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%5
+                    if itime == 1
+                        sign2n = -sign2(1:c^2*p);
+                        L = sparse(cholupdate(full(L),full(sqrt(a2)*sign2n),'-'));
+                        
+                    end
+                    
+                    if itimes == N-p
+                        
+                        sign2n = sign2(end-c^2*p+1:end);
+                        L = sparse(cholupdate(full(L),full(sqrt(a2)*sign2n),'-'));
+                        
+                    end
+                    
+                    if (itimes > 1) && (itimes < N-p)
+                        sign2n = sign2((itime-1)*c^2*p+1:itime*c^2*p) - sign2(itime*c^2*p+1:(itime+1)*c^2*p);
+                        L = sparse(cholupdate(full(L),full(sqrt(a2)*sign2n),'-'));
+                        
+                    end
+                    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                    
+                    randvec = randn(c^2*p,1);
+                    MCsample = L\randvec+X((itime-1)*c^2*p+1:itime*c^2*p);
+                    X_new = X;
+                    X_new((itime-1)*c^2*p+1:itime*c^2*p) =  MCsample;
+                    
+                    
+                    
+     
+                    
+                    ak = min(1,exp(p_tilde(X_new)-p_tilde(X)));
+                    if rand(1) > ak
+                       blockMCsample(:,(iMC-1)*(N-p)+itime) = X;
+                    else
+                       blockMCsample(:,(iMC-1)*(N-p)+itime) = X_new;
+                       X = X_new;
+                        naccept = naccept + 1;
+                    end
+                    
+                    
+                end
+            end
+            
+            e1 = mean(log(sum(abs(blockMCsample),1)+obj.beta1));
+            e2 = mean(log(sum(abs(obj.D*blockMCsample),1)+obj.beta2));
+        
+        end
+        
+        function matrix_RnQn(obj)
+            p = obj.m_order;
+            c = obj.chan;
+            N= obj.len;
+            obj.Rn = cell(N-p,1);
+            obj.Qn = cell(N-p-1,1);
+            
+            Sigma_inv = inv(obj.Sigma);
+            for i = p+1:N
+
+                EEG_in_win = obj.EEGdata(:,i-1:-1:i-p,:);
+                %EEGn = obj.EEGdata(:,i,:);
+                WW = sparse(c^2*p,c^2*p);
+                sW = sparse(1,c^2*p);
+                
+                for k = 1:obj.trial
+                    W_nk = obj.matrix_W(EEG_in_win,k);
+                    %tilde_W_nk = sparse(Sigma_sqrt)*W_nk;
+                    WW = WW + W_nk'*Sigma_inv*W_nk;
+                    % import change on May 11
+                    sW = sW + sparse(squeeze(obj.EEGdata(:,i,k))'*Sigma_inv*W_nk);
+                end
+                
+                obj.Rn{i-p} = WW;
+                obj.Qn{i-p} = sW;
+            end
+            
+
+            
         end
         
         function A = estimate_model(obj,sp_mode)
@@ -622,6 +753,7 @@ classdef sparse_time_varying_MVAR < handle
             obj.get_initX(1);
             obj.matrix_RQ();
             obj.matrix_D();
+            obj.matrix_RnQn();
             obj.theta1 = 0.3;
             obj.theta2 = 0.3;
             disp(['parameters: \n','alpha1: ',num2str(obj.alpha1)])
@@ -634,8 +766,11 @@ classdef sparse_time_varying_MVAR < handle
             c = obj.chan;
             p = obj.m_order;
             N= obj.len;
-            for it = 1:5 
             
+            delta_theta = 1;
+            niterouter = 0;
+            while (delta_theta > 10^-4) && (niterouter < 30)
+                niterouter = niterouter + 1;
                 if sp_mode == 1 % with sparse
                     mu1 = obj.theta1*c^2*p*(N-p)+obj.alpha1;
 
@@ -648,7 +783,7 @@ classdef sparse_time_varying_MVAR < handle
 
                 disp(['mu1: ',num2str(mu1),' mu2', num2str(mu2)]);
                 i = 0;
-                if it == 1
+                if niterouter == 1
                     X_old = obj.X;
                 else
                     X_old = X_update;
@@ -678,8 +813,13 @@ classdef sparse_time_varying_MVAR < handle
                     deltaL = abs(dL);
 
                 end
-
-                update_theta(obj, X_update);
+                temptheta1 = obj.theta1;
+                temptheta2 = obj.theta2;
+                update_theta(obj, X_update,delta_theta);
+                
+                delta_theta = abs((obj.theta1-temptheta1)/temptheta1) + abs((obj.theta2-temptheta2)/temptheta2);
+                
+                disp(['outer iteration: ',num2str(niterouter),' delta theta: ',num2str(delta_theta)]);
             end
             
             X_update(abs(X_update) < obj.threshold_X) = 0;
