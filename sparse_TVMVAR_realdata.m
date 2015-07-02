@@ -290,7 +290,7 @@
             end
             
             data = tempEEGdata;
-            obj.srate = obj.srate/n;
+           % obj.srate = obj.srate/n;
             
         end
         
@@ -368,6 +368,16 @@
                 %obj.fit_mvar = reshape((V*D^0.5)*temp_mvar,[c,cp,l]);
             end
             
+            if preprocess_method == 3
+
+                stv_MVAR = sparse_time_varying_MVAR_EMpara(1,[],[],data,order);
+                %  stv_MVAR.m_order = 3;
+                obj.fit_mvar = stv_MVAR.estimate_model_SAEM();
+                % [c,cp,l] = size(obj.fit_mvar);
+                %temp_mvar = obj.fit_mvar(:,:);
+                %obj.fit_mvar = reshape((V*D^0.5)*temp_mvar,[c,cp,l]);
+            end
+            
         end
         
         function [PDC, DTF] = PDC_DTF(obj)
@@ -375,8 +385,8 @@
             m_order = size(obj.fit_mvar,2)/obj.chan; 
             p = obj.len-m_order;
   
-            Fmax = 15;
-            Nf = 15;
+            Fmax = 40;
+            Nf = 40;
         
             [PDC, DTF] = obj.PDC_DTF_matrix(obj.fit_mvar, m_order , obj.srate , Fmax , Nf );
       

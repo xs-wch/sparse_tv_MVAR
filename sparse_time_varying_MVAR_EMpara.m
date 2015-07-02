@@ -1,18 +1,19 @@
 classdef sparse_time_varying_MVAR_EMpara < handle
     %   This version estimate the model using SAEM algorithm
     %   This version for parallel pomputing on BME cluster
+    %   2015-07-01 this version do not include sparse prior
     
     properties
         chan
         len
         trial
-        alpha1
+%        alpha1
         alpha2
-        beta1
+%        beta1
         beta2
-        lambda1
-        lambda2
-        lambda1_new
+%        lambda1
+%        lambda2
+%        lambda1_new
         lambda2_new
         poster_precisex
 %        poster_varx
@@ -26,7 +27,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
         R
         Q
         D
-        varx1
+%        varx1
         varx2
         W
         
@@ -49,15 +50,15 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             %              3: random generated data, just for test
         
             
-            obj.alpha1 = 10^-3;
+ %           obj.alpha1 = 10^-3;
             obj.alpha2 = 10^-3;
-            obj.beta1 = 10^15;
+ %           obj.beta1 = 10^15;
             obj.beta2 = 10^-3;
            
             obj.threshold_X = 10^-3;
 
             obj.threshold_all = 10^-4;
-            obj.iteration_threshold =20;
+            obj.iteration_threshold =30;
 
             obj.synthetic_SNR = SNR;
             obj.changeamp = amp;
@@ -357,18 +358,18 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                 %%%% initialize the EM algorithm
                 stv_mvar_initmodel = sparse_time_varying_MVAR(1,obj.EEGdata,p);
  %               stv_mvar_initmodel.Sigma = obj.Sigma;
-                init_X = stv_mvar_initmodel.estimate_model(1);
+                init_X = stv_mvar_initmodel.estimate_model();
                 
                 figure_flag = false;
                 if figure_flag
                     A = reshape(full(init_X),[c,c*p,N-p]);
                     
                     figure
-                    for i = 1:6
-                        for j = 1:6
-                            subplot(6,6,(i-1)*6+j)
+                    for i = 1:4
+                        for j = 1:4
+                            subplot(4,4,(i-1)*4+j)
                             chanindex = [i,j];
-                            plot(1:499, squeeze(A(chanindex(1),chanindex(2),:)))
+                            plot(1:497, squeeze(A(chanindex(1),chanindex(2)+8,:)))
                             hold on
                             plot([1:500], [repmat(obj.synthetic_A1(chanindex(1),chanindex(2)),1,200), repmat(obj.synthetic_A2(chanindex(1),chanindex(2)),1,300)],'r-')
                             ylim([-1, 1])
@@ -381,7 +382,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                 
                 
                 
-                obj.lambda1_new  =  ((c^2*p*(N-p)+2*obj.alpha1-2)/(init_X'*init_X+2*obj.beta1)).*ones((N-p),1);
+  %              obj.lambda1_new  =  ((c^2*p*(N-p)+2*obj.alpha1-2)/(init_X'*init_X+2*obj.beta1)).*ones((N-p),1);
                 
                 tempD = obj.D'*obj.D;
                 for i = 1:N-p-1
@@ -390,7 +391,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                     
                     obj.lambda2_new(i) = (c^2*p+2*obj.alpha2-2)/(samplexn'*tempD*samplexn+2*obj.beta2);
                 end
-                disp(['initial lambda1: ',num2str(obj.lambda1_new(1))]);
+%                disp(['initial lambda1: ',num2str(obj.lambda1_new(1))]);
                 disp(['initial lambda2: ',num2str(obj.lambda2_new(1))]);
 
             end
@@ -516,13 +517,13 @@ classdef sparse_time_varying_MVAR_EMpara < handle
 %             
 %         end
         
-        function matrix_varx1_new(obj) % \sum_n lambda_1n*Mn'*Mn
-            p = obj.m_order;
-            c = obj.chan;
-            temp = repmat(obj.lambda1_new', c^2*p,1);
-            obj.varx1 = spdiags(temp(:),0,c^2*p*(obj.len-p),c^2*p*(obj.len-p));
-            
-        end
+%         function matrix_varx1_new(obj) % \sum_n lambda_1n*Mn'*Mn
+%             p = obj.m_order;
+%             c = obj.chan;
+%             temp = repmat(obj.lambda1_new', c^2*p,1);
+%             obj.varx1 = spdiags(temp(:),0,c^2*p*(obj.len-p),c^2*p*(obj.len-p));
+%             
+%         end
         
 %         function matrix_varx2(obj) % \sum_n Mn,n+1'*D'*D*Mn,n+1
 %             p = obj.m_order;
@@ -563,10 +564,10 @@ classdef sparse_time_varying_MVAR_EMpara < handle
         function E_step_new(obj)
             
             
-            obj.matrix_varx1_new();
+        %    obj.matrix_varx1_new();
             obj.matrix_varx2_new();
             
-            obj.poster_precisex = obj.varx1+obj.varx2+obj.R;
+            obj.poster_precisex = obj.varx2+obj.R;
             obj.poster_mux = obj.poster_precisex\obj.Q';
             
             
@@ -663,17 +664,17 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             L = chol(obj.poster_precisex);
             sample = L\randn(c^2*p*(N-p),1) + obj.poster_mux;
             
-            lambda1_SEM =  (c^2*p*(N-p)+2*obj.alpha1-2)/(sample'*sample+2*obj.beta1);
+%            lambda1_SEM =  (c^2*p*(N-p)+2*obj.alpha1-2)/(sample'*sample+2*obj.beta1);
             
-            if r == 1
-                obj.lambda1_new  =  lambda1_SEM*ones((N-p),1);
-            else
-                
-                temp1 = trace(poster_varx) + obj.poster_mux'*obj.poster_mux+2*obj.beta1;
-                lambda1_EM = (c^2*p*(N-p)+2*obj.alpha1-2)/temp1*ones((N-p),1);
-                
-                obj.lambda1_new = (1-r)*lambda1_EM+r*lambda1_SEM;
-            end
+%             if r == 1
+%                 obj.lambda1_new  =  lambda1_SEM*ones((N-p),1);
+%             else
+%                 
+%                 temp1 = trace(poster_varx) + obj.poster_mux'*obj.poster_mux+2*obj.beta1;
+%                 lambda1_EM = (c^2*p*(N-p)+2*obj.alpha1-2)/temp1*ones((N-p),1);
+%                 
+%                 obj.lambda1_new = (1-r)*lambda1_EM+r*lambda1_SEM;
+%             end
             
             
             tempD = obj.D'*obj.D;
@@ -830,9 +831,9 @@ classdef sparse_time_varying_MVAR_EMpara < handle
              obj.matrix_RQ();
 
              disp('parameters:')
-             disp(['alpha1: ',num2str(obj.alpha1)])
+%             disp(['alpha1: ',num2str(obj.alpha1)])
              disp(['alpha2: ',num2str(obj.alpha2)])
-             disp(['beta1: ',num2str(obj.beta1)])
+%             disp(['beta1: ',num2str(obj.beta1)])
              disp(['beta2: ',num2str(obj.beta2)])
              disp(['model order: ', num2str(obj.m_order)])
              disp(['EEGdata size: ',num2str(obj.chan),'*',num2str(obj.len),'*',num2str(obj.trial)])
