@@ -58,7 +58,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             obj.threshold_X = 10^-3;
 
             obj.threshold_all = 10^-4;
-            obj.iteration_threshold =30;
+            obj.iteration_threshold =20;
 
             obj.synthetic_SNR = SNR;
             obj.changeamp = amp;
@@ -343,8 +343,8 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             N = obj.len;
             if method == 1
 
-                obj.lambda1_new = 30*rand((N-p),1);
-                obj.lambda2_new = 500*rand((N-p-1),1);
+               % obj.lambda1_new = 30*rand((N-p),1);
+                obj.lambda2_new = rand((N-p-1),1);
 
                 EEG_perm = permute(obj.EEGdata,[2 1 3]);                
                 [~, ~, obj.Sigma, ~, ~, ~] = arfit(EEG_perm, ceil(p/2), p, 'sbc', 'zero');
@@ -385,12 +385,17 @@ classdef sparse_time_varying_MVAR_EMpara < handle
   %              obj.lambda1_new  =  ((c^2*p*(N-p)+2*obj.alpha1-2)/(init_X'*init_X+2*obj.beta1)).*ones((N-p),1);
                 
                 tempD = obj.D'*obj.D;
+                tempxDx = zeros(1);
                 for i = 1:N-p-1
                     
                     samplexn = init_X((i-1)*c^2*p+1:(i+1)*c^2*p);
-                    
-                    obj.lambda2_new(i) = (c^2*p+2*obj.alpha2-2)/(samplexn'*tempD*samplexn+2*obj.beta2);
+                    %%%%%% modified at 9.6
+                    %obj.lambda2_new(i) = (c^2*p+2*obj.alpha2-2)/(samplexn'*tempD*samplexn+2*obj.beta2);
+                    tempxDx = tempxDx + samplexn'*tempD*samplexn;
                 end
+                obj.lambda2_new = ((c^2*p*(N-p-1)+2*obj.alpha2-2)/(tempxDx+2*obj.beta2))*ones(N-p-1,1);
+                %%%% this version use lambda2 for all data points
+                
 %                disp(['initial lambda1: ',num2str(obj.lambda1_new(1))]);
                 disp(['initial lambda2: ',num2str(obj.lambda2_new(1))]);
 
@@ -656,13 +661,91 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             p = obj.m_order;
             c = obj.chan;
             N = obj.len;
-
-            poster_varx = obj.poster_precisex\eye(c^2*p*(N-p));
+            
+            if (c^2*p*(N-p))^2 < 10*(1024^3*8) 
+                poster_varx = obj.poster_precisex\eye(c^2*p*(N-p));
+            else
+                % to construct a sparse covariance matrix using matlab
+                % sparse matrix format
+                tempi1 = repmat((1:2*c^2*p)',1,c^2*p);
+                tempi2 = zeros(3*c^2*p,c^2*p,N-p-2);
+                tempi = repmat((1:3*c^2*p)',1,c^2*p);
+                tempi3 = tempi1 + c^2*p*(N-p-2);
+                
+                %index_i = zeros((c^2*p)^2*(3*(N-p)-2));
+                %index_j = zeros((c^2*p)^2*(3*(N-p)-2));
+                tempij2 = zeros(3*c^2*p,c^2*p,N-p-2);
+                
+                tempj1 = repmat(1:c^2*p,2*c^2*p,1);
+                tempj2 = repmat(c^2*p+1:c^2*p*(N-p-1),3*c^2*p,1);
+                tempj3 = repmat(c^2*p*(N-p-1)+1:c^2*p*(N-p),2*c^2*p,1);
+                index_j = [tempj1(:);tempj2(:);tempj3(:)];
+                clear tempj1 tempj2 tempj3
+                
+                tic
+                for i = 1:N-p
+                    tempM = sparse((i-1)*c^2*p+1:i*c^2*p,1:c^2*p,ones(c^2*p,1), c^2*p*(N-p), c^2*p);
+                    %tempM(:,(i-1)*c^2*p+1:i*c^2*p) = eye(c^2*p,c^2*p);
+                    tempposter_varx = obj.poster_precisex\tempM;
+ 
+                    
+                    if i ==1
+                        %tempi = repmat((1:2*c^2*p)',1,c^2*p);
+                        tempij1 = tempposter_varx(1:2*c^2*p,:);
+                        %index_i(1:(c^2*p)^2*2) = tempi(:);
+                        %value_ij(1:(c^2*p)^2*2) = tempv(:);
+                        
+                    end
+                    
+                    if i == N-p
+                        tempij3 = tempposter_varx(c^2*p*(N-p-2)+1:c^2*p*(N-p),:);
+                        %index_i(1:(c^2*p)^2*2) = tempi(:);
+                        %value_ij(end-(c^2*p)^2*2+1:end) = tempv(:);
+                    end
+                    
+                    if (i < N-p) && (i > 1)
+                       tempi2(:,:,i-1) = tempi+c^2*p*(i-2);
+                       tempij2(:,:,i-1)= tempposter_varx(c^2*p*(i-2)+1:c^2*p*(i+1),:);
+                       
+                       
+                    end
+                    
+                    
+%                     if i ==1
+%                         %poster_varx = sparse(c^2*p*(N-p),c^2*p);
+%                         poster_varx = [tempposter_varx(1:2*c^2*p,:);sparse(c^2*p*(N-p-2),c^2*p)];
+%                     end
+%                     
+%                     if i == N-p
+%                         tempposter_varx = [sparse(c^2*p*(N-p-2),c^2*p);tempposter_varx(c^2*p*(N-p-2)+1:c^2*p*(N-p),:)];
+%                         poster_varx = [poster_varx,tempposter_varx];
+%                     end
+%                     
+%                     if (i < N-p) && (i > 1)
+%                         tempposter_varx = [sparse(c^2*p*(i-2),c^2*p);tempposter_varx(c^2*p*(i-2)+1:c^2*p*(i+1),:);sparse(c^2*p*(N-p-i-1),c^2*p)];
+%                         poster_varx = [poster_varx,tempposter_varx];
+%                     end
+                    
+                end
+                toc
+                
+                index_i = [tempi1(:);tempi2(:);tempi3(:)];
+                clear tempi1 tempi2 tempi3 tempi
+                value_ij = [tempij1(:);tempij2(:);tempij3(:)];
+                clear tempij1 tempij2 tempij3
+                
+                poster_varx = sparse(index_i,index_j,value_ij,c^2*p*(N-p),c^2*p*(N-p));
+                clear index_i index_j value_ij
+                
+                
+            end
                
             r = obj.generate_r(niter);
             
-            L = chol(obj.poster_precisex);
-            sample = L\randn(c^2*p*(N-p),1) + obj.poster_mux;
+%            if r~=0
+                [L, prank]= chol(obj.poster_precisex);
+                sample = L\randn(c^2*p*(N-p),1) + obj.poster_mux;
+%            end
             
 %            lambda1_SEM =  (c^2*p*(N-p)+2*obj.alpha1-2)/(sample'*sample+2*obj.beta1);
             
@@ -676,27 +759,48 @@ classdef sparse_time_varying_MVAR_EMpara < handle
 %                 obj.lambda1_new = (1-r)*lambda1_EM+r*lambda1_SEM;
 %             end
             
-            
+%%%%%%%%%%%%%%%%%%%% modified at 9.6            
+%             tempD = obj.D'*obj.D;
+%             for i = 1:N-p-1
+%                 
+%                 samplexn = sample((i-1)*c^2*p+1:(i+1)*c^2*p);
+%                 
+%                 lambda2_SEM = (c^2*p+2*obj.alpha2-2)/(samplexn'*tempD*samplexn+2*obj.beta2);
+%                 if r == 1
+%                     obj.lambda2_new(i) = lambda2_SEM;
+%                 else
+%                     
+%                     xn = obj.poster_mux((i-1)*c^2*p+1:(i+1)*c^2*p);
+%                     vxn =  poster_varx((i-1)*c^2*p+1:(i+1)*c^2*p,(i-1)*c^2*p+1:(i+1)*c^2*p);
+%                     lambda2_EM = (c^2*p+2*obj.alpha2-2)/(xn'*tempD*xn+trace(vxn*tempD)+2*obj.beta2);
+%                     obj.lambda2_new(i) = (1-r)*lambda2_EM+r*lambda2_SEM;
+%                 end
+%                 
+%                 
+%             end
+
             tempD = obj.D'*obj.D;
+            tempxDx_SEM = 0;
+            tempxDx_EM = 0;
             for i = 1:N-p-1
                 
                 samplexn = sample((i-1)*c^2*p+1:(i+1)*c^2*p);
                 
-                lambda2_SEM = (c^2*p+2*obj.alpha2-2)/(samplexn'*tempD*samplexn+2*obj.beta2);
-                if r == 1
-                    obj.lambda2_new(i) = lambda2_SEM;
-                else
+                tempxDx_SEM = tempxDx_SEM+samplexn'*tempD*samplexn;
+
                     
-                    xn = obj.poster_mux((i-1)*c^2*p+1:(i+1)*c^2*p);
-                    vxn =  poster_varx((i-1)*c^2*p+1:(i+1)*c^2*p,(i-1)*c^2*p+1:(i+1)*c^2*p);
-                    lambda2_EM = (c^2*p+2*obj.alpha2-2)/(xn'*tempD*xn+trace(vxn*tempD)+2*obj.beta2);
-                    obj.lambda2_new(i) = (1-r)*lambda2_EM+r*lambda2_SEM;
-                end
+                xn = obj.poster_mux((i-1)*c^2*p+1:(i+1)*c^2*p);
+                vxn =  poster_varx((i-1)*c^2*p+1:(i+1)*c^2*p,(i-1)*c^2*p+1:(i+1)*c^2*p);
+                tempxDx_EM = tempxDx_EM+xn'*tempD*xn+trace(vxn*tempD);
+             
+              
                 
                 
             end
+            lambda2_SEM = (c^2*p*(N-p-1)+2*obj.alpha2-2)/( tempxDx_SEM +2*obj.beta2);
+            lambda2_EM = (c^2*p*(N-p-1)+2*obj.alpha2-2)/(tempxDx_EM +2*obj.beta2);
             
-            
+            obj.lambda2_new = ((1-r)*lambda2_EM+r*lambda2_SEM)*ones(N-p-1,1);
             obj.matrix_Sigma(2,poster_varx);
             
         end
@@ -706,8 +810,12 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             if niter < 5
                 %r = 1/(0.1*niter + 0.9);
                 r = 1;
-            else
-                r = 1/(niter-4);
+            else if niter < 18
+                    r = 1/(niter-4);
+                else
+                    r = 0;
+                end
+                
             end
          
           
@@ -770,7 +878,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
         
          function A = estimate_model_EM_new(obj)
             
-            obj.get_init_new(1);
+            obj.get_init_new(2);
 %            obj.get_initX(1);
             obj.matrix_RQ();
       
@@ -791,7 +899,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             deltaX = 1;
             X_old = sparse(ones(c^2*p*np,1));
             niter = 0;
-            while (deltaX > obj.threshold_all) && (niter < obj.iteration_threshold) 
+            while (deltaX > obj.threshold_all) && (niter < obj.iteration_threshold)
                 niter = niter+1;
                 tic;
                 obj.E_step_new();
