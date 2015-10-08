@@ -2,6 +2,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
     %   This version estimate the model using SAEM algorithm
     %   This version for parallel pomputing on BME cluster
     %   2015-07-01 this version do not include sparse prior
+    %   2015-09-18 measurement error covariance matrix varys in this version
     
     properties
         chan
@@ -21,7 +22,10 @@ classdef sparse_time_varying_MVAR_EMpara < handle
         m_order
         filename_full
         EEGdata
+        predict_EEG
+        inovation_process
         Sigma % covriance matrix, sparse matrix
+        Sigma0 % prior in Wishart distribution. Initialized with MVAR or adaptive MVAR
         X % vecterized MVAR coefficients, sparse matrix 
         
         R
@@ -53,17 +57,17 @@ classdef sparse_time_varying_MVAR_EMpara < handle
  %           obj.alpha1 = 10^-3;
             obj.alpha2 = 10^-3;
  %           obj.beta1 = 10^15;
-            obj.beta2 = 10^-3;
+            obj.beta2 = 10;
            
             obj.threshold_X = 10^-3;
 
-            obj.threshold_all = 10^-4;
-            obj.iteration_threshold =20;
+            obj.threshold_all = 10^-7;
+            obj.iteration_threshold =50;
 
             obj.synthetic_SNR = SNR;
             obj.changeamp = amp;
             if working_mode == 1
-                 obj.m_order = order;
+                obj.m_order = order;
 
                 obj.EEGdata = data_to_analyze;
                 [obj.chan, obj.len, obj.trial] = size(obj.EEGdata);
@@ -87,12 +91,12 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                 obj.m_order = 1; % simulation using 1 order model, it is difficult to find a higher order stable system
                 obj.chan = 4;
                 obj.len = 500;
-                obj.trial = 60;
+                obj.trial = 30;
                 
                 obj.filename_full = [];
                 
                 obj.EEGdata = obj.synthtic_generate(200);
-                obj.m_order = order;
+                %obj.m_order = order;
             end
                 
                 obj.matrix_D();
@@ -188,55 +192,72 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             num_try = 0;
             while(isStable)
                 num_try = num_try+1;
-                AR_coef1 = diag(2*rand(obj.chan,1)-1);
-                index_zero = randi(obj.chan,[round(obj.chan*0.25),1]);
-         
-                for i = 1:length(index_zero)
-                    tempAR_coef = AR_coef1(:,index_zero(i));
-                    tempAR_coef = circshift(tempAR_coef, randi(obj.chan-1,1));
-                    AR_coef1(:,index_zero(i)) = tempAR_coef;
+                AR_coef1 = 2*rand(obj.chan)-1;
+                [U,S,V] = svd(AR_coef1);
+                sprd = max(abs(diag(S)));
+                if max(abs(diag(S)))>=1
+                    S = S./sprd*0.9;
                 end
-
-                %%%% some nonzero coefficients off the diagnoal
-                AR_coef1 = AR_coef1+(2*rand(obj.chan)-1)...
-                    .*(sprand(obj.chan, obj.chan, 0.3/obj.chan) ~= 0);
-                %%%% keep all the elements in the matrix lower than 0.9
-                %%%% this help improve stability
-                I = find(abs(AR_coef1) > 0.90);
-                if ~isempty(I)
-                    AR_coef1(I) = sign(randn(length(I),1)).*(0.90*rand(length(I),1));
+                AR_coef1 = U*S*V';
+                    
+                AR_coef2 = 2*rand(obj.chan)-1;
+                [U,S,V] = svd(AR_coef2);
+                sprd = max(abs(diag(S)));
+                if max(abs(diag(S)))>=1
+                    S = S./sprd*0.9;
                 end
+                AR_coef2 = U*S*V';
                 
-                %%%% some elements changes after 200ms
-                %number_nonzero = sum(sum(AR_coef1 ~= 0));
-                number_change = 1;
-
-
-                AR_coefI = (2*rand(obj.chan)-1).*(AR_coef1~=0);
-                temp_threshold = sort(AR_coefI(:));
-                change_threshold = temp_threshold(number_change);
-                change_I = find(AR_coefI <= change_threshold);
-           
-                if ~isempty(change_I)
-                    tempARcoef = AR_coef1(:);
-                    for i = 1:length(change_I)
-                        if (tempARcoef(change_I(i)) +obj.changeamp) >=1
-                            tempARcoef(change_I(i)) = tempARcoef(change_I(i)) - obj.changeamp;
-                        end
-                        if (tempARcoef(change_I(i)) -obj.changeamp) <= -1
-                            tempARcoef(change_I(i)) = tempARcoef(change_I(i)) + obj.changeamp;
-                        end
-                        if (tempARcoef(change_I(i)) -obj.changeamp >= -1) && (tempARcoef(change_I(i)) +obj.changeamp<= 1)
-                            temp = shuffle([tempARcoef(change_I(i))+obj.changeamp,tempARcoef(change_I(i))-obj.changeamp]);
-                            tempARcoef(change_I(i)) = temp(1);
-                        end
-                    end
-                    AR_coef2 = reshape(tempARcoef,[obj.chan,obj.chan]);
-                else
-                    pause
-                    AR_coef2 = AR_coef1;
-                            
-                end
+                clear U S V sprd
+%                 AR_coef1 = diag(2*rand(obj.chan,1)-1);
+%                 index_zero = randi(obj.chan,[round(obj.chan*0.25),1]);
+%          
+%                 for i = 1:length(index_zero)
+%                     tempAR_coef = AR_coef1(:,index_zero(i));
+%                     tempAR_coef = circshift(tempAR_coef, randi(obj.chan-1,1));
+%                     AR_coef1(:,index_zero(i)) = tempAR_coef;
+%                 end
+% 
+%                 %%%% some nonzero coefficients off the diagnoal
+%                 AR_coef1 = AR_coef1+(2*rand(obj.chan)-1)...
+%                     .*(sprand(obj.chan, obj.chan, 0.3/obj.chan) ~= 0);
+%                 %%%% keep all the elements in the matrix lower than 0.9
+%                 %%%% this help improve stability
+%                 I = find(abs(AR_coef1) > 0.90);
+%                 if ~isempty(I)
+%                     AR_coef1(I) = sign(randn(length(I),1)).*(0.90*rand(length(I),1));
+%                 end
+%                 
+%                 %%%% some elements changes after 200ms
+%                 %number_nonzero = sum(sum(AR_coef1 ~= 0));
+%                 number_change = 1;
+% 
+% 
+%                 AR_coefI = (2*rand(obj.chan)-1).*(AR_coef1~=0);
+%                 temp_threshold = sort(AR_coefI(:));
+%                 change_threshold = temp_threshold(number_change);
+%                 change_I = find(AR_coefI <= change_threshold);
+%            
+%                 if ~isempty(change_I)
+%                     tempARcoef = AR_coef1(:);
+%                     for i = 1:length(change_I)
+%                         if (tempARcoef(change_I(i)) +obj.changeamp) >=1
+%                             tempARcoef(change_I(i)) = tempARcoef(change_I(i)) - obj.changeamp;
+%                         end
+%                         if (tempARcoef(change_I(i)) -obj.changeamp) <= -1
+%                             tempARcoef(change_I(i)) = tempARcoef(change_I(i)) + obj.changeamp;
+%                         end
+%                         if (tempARcoef(change_I(i)) -obj.changeamp >= -1) && (tempARcoef(change_I(i)) +obj.changeamp<= 1)
+%                             temp = shuffle([tempARcoef(change_I(i))+obj.changeamp,tempARcoef(change_I(i))-obj.changeamp]);
+%                             tempARcoef(change_I(i)) = temp(1);
+%                         end
+%                     end
+%                     AR_coef2 = reshape(tempARcoef,[obj.chan,obj.chan]);
+%                 else
+%                     pause
+%                     AR_coef2 = AR_coef1;
+%                             
+%                 end
 
                 A1 = cell(1,1);
                
@@ -246,9 +267,10 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                 A2{1} = AR_coef2;
                 
                 
-                epislon = eye(obj.chan);
-                Md1 = vgxset('n',obj.chan,'nAR',1,'AR',A1,'Q',epislon);
-                Md2 = vgxset('n',obj.chan,'nAR',1,'AR',A2,'Q',epislon);
+                epislon = randn(obj.chan);
+                epislon = epislon*epislon';
+                Md1 = vgxset('n',obj.chan,'nAR',1,'AR',A1,'Q',5*epislon);
+                Md2 = vgxset('n',obj.chan,'nAR',1,'AR',A2,'Q',10*epislon);
 
                 [isStable1,~,eigAR1,~] = vgxqual(Md1);
                 [isStable2,~,eigAR2,~] = vgxqual(Md2);
@@ -344,17 +366,20 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             if method == 1
 
                % obj.lambda1_new = 30*rand((N-p),1);
-                obj.lambda2_new = rand((N-p-1),1);
+                obj.lambda2_new = 100*rand((N-p-1),1);
 
                 EEG_perm = permute(obj.EEGdata,[2 1 3]);                
-                [~, ~, obj.Sigma, ~, ~, ~] = arfit(EEG_perm, ceil(p/2), p, 'sbc', 'zero');
+                [~, ~, obj.Sigma0, ~, ~, ~] = arfit(EEG_perm, ceil(p/2), p, 'sbc', 'zero');
+                
+                obj.Sigma = repmat(obj.Sigma0,[1,1,(N-p)]);
             end
             
             if method == 2 
              
                 EEG_perm = permute(obj.EEGdata,[2 1 3]);
                 
-                [~, ~, obj.Sigma, ~, ~, ~] = arfit(EEG_perm, ceil(p/2), p, 'sbc', 'zero');
+                [~, ~, obj.Sigma0, ~, ~, ~] = arfit(EEG_perm, ceil(p/2), 15, 'sbc', 'zero');
+                obj.Sigma = repmat(obj.Sigma0,[1,1,(N-p)]);
                 %%%% initialize the EM algorithm
                 stv_mvar_initmodel = sparse_time_varying_MVAR(1,obj.EEGdata,p);
  %               stv_mvar_initmodel.Sigma = obj.Sigma;
@@ -411,17 +436,19 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             obj.R = sparse(c^2*p*(obj.len-p),c^2*p*(obj.len-p));
             obj.Q = sparse(1, c^2*p*(obj.len-p));
             
-            Sigma_inv = sparse(inv(obj.Sigma));
+          %  Sigma_inv = sparse(inv(obj.Sigma));
             for i = p+1:obj.len
                 %EEG_in_win = obj.EEGdata(:,i-1:-1:i-p,:);
                 WW = sparse(c^2*p,c^2*p);
                 sW = sparse(1,c^2*p);
                 I = false(c^2*p*(obj.len-p),1);
                 I((i-p-1)*c^2*p+1:(i-p)*c^2*p) = true;
+                Sigman = squeeze(obj.Sigma(:,:,i-p));
                 for k = 1:obj.trial
                     W_nk = obj.W{i-p,k};
-                    WW = WW + W_nk'*Sigma_inv*W_nk;
-                    sW = sW + sparse(squeeze(obj.EEGdata(:,i,k)))'*Sigma_inv*W_nk;
+                    Sigma_W = Sigman\W_nk;
+                    WW = WW + W_nk'*Sigma_W;
+                    sW = sW + sparse(squeeze(obj.EEGdata(:,i,k)))'*Sigma_W;
                 end
 
                 obj.R(I,I) = obj.R(I,I) + WW;
@@ -442,7 +469,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                 EEG_in_win = obj.EEGdata(:,iwin-1:-1:iwin-p,:);
                 for k = 1:obj.trial
                     for i = 1:p
-                        tempW_nk(:,(i-1)*c^2+1:i*c^2) = kron(squeeze(EEG_in_win(:,i,k))',eye(c));
+                        tempW_nk(:,(i-1)*c^2+1:i*c^2) = kron(squeeze(EEG_in_win(:,i,k))',speye(c));
                     end
                     obj.W{iwin-p,k} = sparse(tempW_nk);
                 end
@@ -474,8 +501,12 @@ classdef sparse_time_varying_MVAR_EMpara < handle
 
             tempmux = obj.poster_mux;
             tempvarx = poster_varx;
-            sigma1 = zeros(c);
-            sigma2 = zeros(c);
+            
+            obj.predict_EEG = zeros(c,np,obj.trial);
+            obj.inovation_process = zeros(c,np,obj.trial);
+            
+%             sigma1 = zeros(c);
+%             sigma2 = zeros(c);
             for i = p+1:obj.len
 
                 EEG_target = squeeze(obj.EEGdata(:,i,:));
@@ -489,20 +520,46 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                
                 for k = 1:obj.trial
                     W_nk = obj.W{i-p,k};
-                    epsilon_n(:,k) = EEG_target(:,k) - W_nk*X_n;
+                    obj.predict_EEG(:,i-p,k) =  W_nk*X_n;
+                    epsilon_n(:,k) = EEG_target(:,k) -obj.predict_EEG(:,i-p,k);
+                    obj.inovation_process(:,i-p,k) = epsilon_n(:,k);
                     poster_varxn = poster_varxn + W_nk*temp*W_nk';
                     
                 end
-                sigma1 = sigma1 + epsilon_n*epsilon_n';
-                sigma2 = sigma2 + poster_varxn;
-            end
-                sigma = sigma1+sigma2;
+             %   sigma1 = sigma1 + epsilon_n*epsilon_n';
+             %   sigma2 = sigma2 + poster_varxn;
             
-            if mode == 1 % the bayesian version with conjugate prior
-               obj.Sigma = (sigma+eye(c))/(np*obj.trial -1);
-            end
-            if mode == 2 % the bayesian version with uniform prior
-               obj.Sigma = (sigma)/(np*obj.trial);
+                sigma =epsilon_n*epsilon_n'+poster_varxn;
+            
+                if mode == 1 % the bayesian version with conjugate prior
+                    if obj.trial == 1
+                        
+                        obj.Sigma(:,:,i-p) = (sigma+obj.Sigma0);
+                    else
+                        obj.Sigma(:,:,i-p) = (sigma+obj.Sigma0)/(obj.trial-1);
+                    end
+                end
+                
+                if mode == 2 % the ML version
+                    obj.Sigma(:,:,i-p) = (sigma)/(obj.trial);
+                end
+                
+                if mode == 3 % the bayesian version with conjugate prior
+                    if obj.trial == 1
+                        if i == p+1
+                            obj.Sigma(:,:,i-p) = (sigma+obj.Sigma0);
+                        else
+                            obj.Sigma(:,:,i-p) = (sigma+obj.Sigma(:,:,i-p-1));
+                        end
+                    else
+                        if i == p+1
+                            obj.Sigma(:,:,i-p) = (sigma+obj.Sigma0)/(obj.trial - 1);
+                        else
+                            obj.Sigma(:,:,i-p) = (sigma+obj.Sigma(:,:,i-p-1))/(obj.trial - 1);
+                        end
+                    end
+                end
+            
             end
             
         end
@@ -568,7 +625,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
         
         function E_step_new(obj)
             
-            
+            obj.matrix_RQ();
         %    obj.matrix_varx1_new();
             obj.matrix_varx2_new();
             
@@ -741,11 +798,11 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             end
                
             r = obj.generate_r(niter);
-            
-%            if r~=0
+            r = 0;
+            if r~=0
                 [L, prank]= chol(obj.poster_precisex);
                 sample = L\randn(c^2*p*(N-p),1) + obj.poster_mux;
-%            end
+            end
             
 %            lambda1_SEM =  (c^2*p*(N-p)+2*obj.alpha1-2)/(sample'*sample+2*obj.beta1);
             
@@ -783,11 +840,11 @@ classdef sparse_time_varying_MVAR_EMpara < handle
             tempxDx_SEM = 0;
             tempxDx_EM = 0;
             for i = 1:N-p-1
-                
+                if r~=0
                 samplexn = sample((i-1)*c^2*p+1:(i+1)*c^2*p);
                 
                 tempxDx_SEM = tempxDx_SEM+samplexn'*tempD*samplexn;
-
+                end
                     
                 xn = obj.poster_mux((i-1)*c^2*p+1:(i+1)*c^2*p);
                 vxn =  poster_varx((i-1)*c^2*p+1:(i+1)*c^2*p,(i-1)*c^2*p+1:(i+1)*c^2*p);
@@ -797,11 +854,20 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                 
                 
             end
+            if r~=0
             lambda2_SEM = (c^2*p*(N-p-1)+2*obj.alpha2-2)/( tempxDx_SEM +2*obj.beta2);
+            end
             lambda2_EM = (c^2*p*(N-p-1)+2*obj.alpha2-2)/(tempxDx_EM +2*obj.beta2);
             
+            
+            if r~=0
             obj.lambda2_new = ((1-r)*lambda2_EM+r*lambda2_SEM)*ones(N-p-1,1);
-            obj.matrix_Sigma(2,poster_varx);
+            else
+              obj.lambda2_new = (lambda2_EM)*ones(N-p-1,1);  
+            end
+            
+            disp(['lambda',num2str(lambda2_EM)]);
+            obj.matrix_Sigma(1,poster_varx);
             
         end
         
@@ -933,10 +999,10 @@ classdef sparse_time_varying_MVAR_EMpara < handle
          
          function A = estimate_model_SAEM(obj)
              
-             obj.get_init_new(2);
+             obj.get_init_new(1);
              obj.matrix_W();
         
-             obj.matrix_RQ();
+%             obj.matrix_RQ();
 
              disp('parameters:')
 %             disp(['alpha1: ',num2str(obj.alpha1)])
@@ -953,6 +1019,7 @@ classdef sparse_time_varying_MVAR_EMpara < handle
              deltaX = 1;
              X_old = sparse(ones(c^2*p*np,1));
              niter = 0;
+             fig_flag = false;
              while (deltaX > obj.threshold_all) && (niter < obj.iteration_threshold)
                  niter = niter+1;
                  tic;
@@ -961,9 +1028,9 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                  tic;
                  obj.M_step_SAEM(niter);
                  t2 = toc;
-                 tic;
-                 obj.matrix_RQ();
-                 t3 = toc;
+%                  tic;
+%                  obj.matrix_RQ();
+%                  t3 = toc;
                  
                  deltaX = norm(obj.poster_mux-X_old)/norm(X_old);
                  X_old = obj.poster_mux;
@@ -971,7 +1038,22 @@ classdef sparse_time_varying_MVAR_EMpara < handle
                  disp(['iteration: ', num2str(niter), ' deltaX: ',num2str(deltaX)]);
                  disp(['E-step takes ',num2str(t1),'s']);
                  disp(['M-step takes ',num2str(t2),'s']);
-                 disp(['Update Q and R takes ',num2str(t3),'s']);
+                 
+                 if fig_flag
+                    figure
+                    for ichan = 1:obj.chan
+                    subplot(obj.chan,2,2*ichan-1);
+                    plot(squeeze(obj.predict_EEG(ichan,:,1)),'r-','LineWidth',2);
+                    hold on
+                    plot(squeeze(obj.EEGdata(ichan,p+1:end,1)),'b-')
+                    subplot(obj.chan,2,2*ichan);
+                    plot(squeeze(obj.inovation_process(ichan,:,1)),'b-')
+                    
+                    end
+                     
+                     
+                 end
+        %         disp(['Update Q and R takes ',num2str(t3),'s']);
                  
              end
              
