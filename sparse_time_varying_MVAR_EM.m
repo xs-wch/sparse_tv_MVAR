@@ -315,7 +315,7 @@ classdef sparse_time_varying_MVAR_EM < handle
         function get_init(obj, method)
             % method 1: randomly generated matrix
             % method 2: using all data to estimate AR
-            addpath /home/wch/Documents/tv_AR/arfit
+            addpath /home/wch/Documents/tv_AR/arfit % replace this path with your own path to ARfit.You can find ARfit here:https://www.mathworks.com/matlabcentral/fileexchange/174-arfit
             p = obj.m_order;
             c = obj.chan;
             N = obj.len;
